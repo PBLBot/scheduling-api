@@ -1,0 +1,20 @@
+{
+    "name": "pbl-api",
+    "version": "1.0.0",
+    "description": "Date/time API for PBL Discord Bot",
+    "main": "src/server.js",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "nodemon src/server.js"
+    },
+    "author": "satvik21",
+    "license": "MIT",
+    "dependencies": {
+        "express": "^4.19.2",
+        "chrono-node": "^2.3.4",
+        "luxon": "^3.4.4"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.3"
+    }
+}

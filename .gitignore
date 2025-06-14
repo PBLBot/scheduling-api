@@ -1,0 +1,9 @@
+# dependencies
+node_modules/
+
+# environment
+.env
+
+# misc
+.DS_Store
+*.log
