@@ -137,7 +137,9 @@ function parseMultipleDays(text, detectedTimezone) {
         if (detectedTimezone) {
             if (detectedTimezone.startsWith('UTC_OFFSET_')) {
                 const offsetMinutes = parseInt(detectedTimezone.replace('UTC_OFFSET_', ''));
+
                 const dt = DateTime.fromJSDate(targetDate, { zone: 'UTC' }).minus({ minutes: offsetMinutes });
+
                 finalDate = dt.toJSDate();
 
                 const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
@@ -150,12 +152,13 @@ function parseMultipleDays(text, detectedTimezone) {
                 timezoneInfo = {
                     timezone: `UTC${offsetStr}`,
                     offset: offsetMinutes,
-                    offsetName: `UTC${offsetSign}${offsetMinutes / 60}`,
+                    offsetName: `UTC${offsetSign}${Math.abs(offsetMinutes / 60)}`,
                     zoneName: 'Manual Offset',
                     isManualOffset: true
                 };
             } else {
                 try {
+                    // Create DateTime in the specified timezone
                     const dt = DateTime.fromObject({
                         year: targetDate.getFullYear(),
                         month: targetDate.getMonth() + 1,
@@ -187,6 +190,99 @@ function parseMultipleDays(text, detectedTimezone) {
             unixTimestamp: Math.floor(finalDate.getTime() / 1000)
         };
     });
+
+    return results;
+}
+
+function parseDateRange(text, detectedTimezone) {
+    // Check for date range patterns like "15th to 20th at 10pm"
+    const dateRangePattern = /(\d{1,2})(?:st|nd|rd|th)?\s+to\s+(\d{1,2})(?:st|nd|rd|th)?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
+    const match = text.match(dateRangePattern);
+
+    if (!match) return null;
+
+    const startDay = parseInt(match[1]);
+    const endDay = parseInt(match[2]);
+    const hour = parseInt(match[3]);
+    const minute = parseInt(match[4]) || 0;
+    const meridiem = match[5].toLowerCase();
+    const hour24 = meridiem === 'pm' && hour !== 12 ? hour + 12 :
+        meridiem === 'am' && hour === 12 ? 0 : hour;
+
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const results = [];
+
+    // Generate dates for each day in the range
+    for (let day = startDay; day <= endDay; day++) {
+        const targetDate = new Date(currentYear, currentMonth, day, hour24, minute, 0, 0);
+
+        // If the date is in the past, use next month
+        if (targetDate < now) {
+            targetDate.setMonth(currentMonth + 1);
+        }
+
+        let finalDate = targetDate;
+        let timezoneInfo = null;
+
+        // Apply timezone if detected
+        if (detectedTimezone) {
+            if (detectedTimezone.startsWith('UTC_OFFSET_')) {
+                const offsetMinutes = parseInt(detectedTimezone.replace('UTC_OFFSET_', ''));
+
+                const dt = DateTime.fromJSDate(targetDate, { zone: 'UTC' }).minus({ minutes: offsetMinutes });
+
+                finalDate = dt.toJSDate();
+
+                const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
+                const offsetMins = Math.abs(offsetMinutes) % 60;
+                const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+                const offsetStr = offsetMins > 0 ?
+                    `${offsetSign}${offsetHours}:${String(offsetMins).padStart(2, '0')}` :
+                    `${offsetSign}${offsetHours}`;
+
+                timezoneInfo = {
+                    timezone: `UTC${offsetStr}`,
+                    offset: offsetMinutes,
+                    offsetName: `UTC${offsetSign}${Math.abs(offsetMinutes / 60)}`,
+                    zoneName: 'Manual Offset',
+                    isManualOffset: true
+                };
+            } else {
+                try {
+                    const dt = DateTime.fromObject({
+                        year: targetDate.getFullYear(),
+                        month: targetDate.getMonth() + 1,
+                        day: targetDate.getDate(),
+                        hour: hour24,
+                        minute: minute
+                    }, { zone: detectedTimezone });
+
+                    if (dt.isValid) {
+                        finalDate = dt.toJSDate();
+                        timezoneInfo = {
+                            timezone: detectedTimezone,
+                            offset: dt.offset,
+                            offsetName: dt.offsetNameShort,
+                            zoneName: dt.zoneName,
+                            isManualOffset: false
+                        };
+                    }
+                } catch (error) {
+                    console.warn('Timezone conversion failed:', error.message);
+                }
+            }
+        }
+
+        results.push({
+            day: day,
+            jsDate: finalDate,
+            timezoneInfo: timezoneInfo,
+            unixTimestamp: Math.floor(finalDate.getTime() / 1000)
+        });
+    }
 
     return results;
 }
@@ -229,6 +325,33 @@ app.get('/parse', (req, res) => {
             iso_date: multipleDaysResult[0].jsDate.toISOString(),
             utc_time: multipleDaysResult[0].jsDate.toISOString(),
             message: `Found ${multipleDaysResult.length} recurring times`
+        });
+    }
+
+    // Check for date range pattern
+    const dateRangeResult = parseDateRange(text, detectedTimezone);
+
+    if (dateRangeResult) {
+        return res.json({
+            original_text: text,
+            found_dates: true,
+            is_range: true,
+            is_multiple_times: true,
+            detected_timezone: detectedTimezone,
+            timezone_info: dateRangeResult[0].timezoneInfo,
+            multiple_times: dateRangeResult.map(result => ({
+                day: result.day,
+                unix_timestamp: result.unixTimestamp,
+                readable_date: result.jsDate.toLocaleString(),
+                iso_date: result.jsDate.toISOString(),
+                utc_time: result.jsDate.toISOString()
+            })),
+            // Keep first result for backward compatibility
+            unix_timestamp: dateRangeResult[0].unixTimestamp,
+            readable_date: dateRangeResult[0].jsDate.toLocaleString(),
+            iso_date: dateRangeResult[0].jsDate.toISOString(),
+            utc_time: dateRangeResult[0].jsDate.toISOString(),
+            message: `Found ${dateRangeResult.length} dates in range`
         });
     }
 
@@ -282,7 +405,7 @@ app.get('/parse', (req, res) => {
                         timezoneInfo = {
                             timezone: `UTC${offsetStr}`,
                             offset: offsetMinutes,
-                            offsetName: `UTC${offsetSign}${offsetMinutes / 60}`,
+                            offsetName: `UTC${offsetSign}${Math.abs(offsetMinutes / 60)}`,
                             zoneName: 'Manual Offset',
                             isManualOffset: true,
                             originalTimeInTimezone: `${hour}:${String(minute).padStart(2, '0')} UTC${offsetStr}`
@@ -293,6 +416,7 @@ app.get('/parse', (req, res) => {
                 }
             } else {
                 try {
+                    // Create time in the specified timezone
                     const dt = DateTime.fromObject({
                         year, month, day, hour, minute, second
                     }, { zone: timezone });
@@ -424,7 +548,8 @@ app.get('/', (req, res) => {
             '/parse?text=playing at 10pm utc 5',
             '/parse?text=gaming at 8pm UTC +7',
             '/parse?text=stream at 9pm GMT 2:30',
-            '/parse?text=available on monday 10pm to thursday 10pm est'
+            '/parse?text=available on monday 10pm to thursday 10pm est',
+            '/parse?text=available from 15th to 20th at 10pm netherlands'
         ]
     });
 });
