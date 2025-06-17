@@ -79,10 +79,26 @@ function detectTimezone(text) {
 }
 
 // NEW: Helper function to adjust dates to future
-function adjustToFuture(jsDate, originalText) {
+// NEW: Helper function to adjust dates to future
+function adjustToFuture(jsDate, originalText, isEndDate = false, startDate = null) {
     const now = new Date();
     const oneDayMs = 24 * 60 * 60 * 1000;
     const oneWeekMs = 7 * oneDayMs;
+
+    // If this is an end date in a range, ensure it's after the start date
+    if (isEndDate && startDate) {
+        // If end date is before start date, move it to next week
+        if (jsDate.getTime() <= startDate.getTime()) {
+            return new Date(jsDate.getTime() + oneWeekMs);
+        }
+        // If end date is valid but in the past, move both start and end forward
+        if (jsDate.getTime() < now.getTime()) {
+            const diffMs = jsDate.getTime() - startDate.getTime();
+            const weeksToAdd = Math.ceil((now.getTime() - jsDate.getTime()) / oneWeekMs);
+            return new Date(jsDate.getTime() + (weeksToAdd * oneWeekMs));
+        }
+        return jsDate;
+    }
 
     // If the date is more than 1 hour in the past, adjust it forward
     if (jsDate.getTime() < (now.getTime() - (60 * 60 * 1000))) {
@@ -412,7 +428,8 @@ app.get('/parse', (req, res) => {
     const result = results[0];
 
     // Helper function to process a chrono date component
-    function processChronoDate(chronoComponent, timezone) {
+    // Helper function to process a chrono date component
+    function processChronoDate(chronoComponent, timezone, isEndDate = false, startDate = null) {
         const year = chronoComponent.get('year');
         const month = chronoComponent.get('month');
         const day = chronoComponent.get('day');
@@ -422,8 +439,8 @@ app.get('/parse', (req, res) => {
 
         let initialDate = chronoComponent.date();
 
-        // MODIFIED: Apply future adjustment for scheduling
-        let adjustedDate = adjustToFuture(initialDate, text);
+        // Apply future adjustment for scheduling with range awareness
+        let adjustedDate = adjustToFuture(initialDate, text, isEndDate, startDate);
 
         let finalDate = adjustedDate;
         let timezoneInfo = null;
@@ -505,7 +522,8 @@ app.get('/parse', (req, res) => {
 
     if (result.end) {
         isRange = true;
-        endResult = processChronoDate(result.end, detectedTimezone);
+        // Pass the start date to ensure end date is after start date
+        endResult = processChronoDate(result.end, detectedTimezone, true, startResult.jsDate);
     }
 
     // Build the response
