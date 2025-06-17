@@ -78,6 +78,48 @@ function detectTimezone(text) {
     return null;
 }
 
+// NEW: Helper function to adjust dates to future
+function adjustToFuture(jsDate, originalText) {
+    const now = new Date();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const oneWeekMs = 7 * oneDayMs;
+
+    // If the date is more than 1 hour in the past, adjust it forward
+    if (jsDate.getTime() < (now.getTime() - (60 * 60 * 1000))) {
+        const lowerText = originalText.toLowerCase();
+
+        // Check if it's a day-of-week reference
+        const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+        const weekendPattern = /\bweekend\b/i;
+
+        if (dayOfWeekPattern.test(lowerText) || weekendPattern.test(lowerText)) {
+            // For day-of-week references, move to next occurrence (add a week)
+            return new Date(jsDate.getTime() + oneWeekMs);
+        }
+
+        // For date ranges like "15th to 20th", move to next month if past
+        const dateRangePattern = /\d{1,2}(?:st|nd|rd|th)?\s+to\s+\d{1,2}(?:st|nd|rd|th)?/i;
+        if (dateRangePattern.test(lowerText)) {
+            const nextMonth = new Date(jsDate);
+            nextMonth.setMonth(nextMonth.getMonth() + 1);
+            return nextMonth;
+        }
+
+        // For other cases, try adding appropriate time periods
+        if (jsDate.getTime() < (now.getTime() - oneWeekMs)) {
+            // If more than a week old, move to next month
+            const nextMonth = new Date(jsDate);
+            nextMonth.setMonth(nextMonth.getMonth() + 1);
+            return nextMonth;
+        } else {
+            // If less than a week old, move to next week
+            return new Date(jsDate.getTime() + oneWeekMs);
+        }
+    }
+
+    return jsDate;
+}
+
 function parseMultipleDays(text, detectedTimezone) {
     // Check if this looks like a weekly availability pattern
     const weeklyPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+.*?to\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i;
@@ -217,12 +259,10 @@ function parseDateRange(text, detectedTimezone) {
 
     // Generate dates for each day in the range
     for (let day = startDay; day <= endDay; day++) {
-        const targetDate = new Date(currentYear, currentMonth, day, hour24, minute, 0, 0);
+        let targetDate = new Date(currentYear, currentMonth, day, hour24, minute, 0, 0);
 
-        // If the date is in the past, use next month
-        if (targetDate < now) {
-            targetDate.setMonth(currentMonth + 1);
-        }
+        // MODIFIED: Use the adjustToFuture function
+        targetDate = adjustToFuture(targetDate, text);
 
         let finalDate = targetDate;
         let timezoneInfo = null;
@@ -380,7 +420,12 @@ app.get('/parse', (req, res) => {
         const minute = chronoComponent.get('minute');
         const second = chronoComponent.get('second') || 0;
 
-        let finalDate = chronoComponent.date();
+        let initialDate = chronoComponent.date();
+
+        // MODIFIED: Apply future adjustment for scheduling
+        let adjustedDate = adjustToFuture(initialDate, text);
+
+        let finalDate = adjustedDate;
         let timezoneInfo = null;
 
         if (timezone) {
@@ -389,7 +434,10 @@ app.get('/parse', (req, res) => {
 
                 try {
                     const specifiedTimeDt = DateTime.fromObject({
-                        year, month, day, hour, minute, second
+                        year: adjustedDate.getFullYear(),
+                        month: adjustedDate.getMonth() + 1,
+                        day: adjustedDate.getDate(),
+                        hour, minute, second
                     }, { zone: 'UTC' }).minus({ minutes: offsetMinutes });
 
                     if (specifiedTimeDt.isValid) {
@@ -416,9 +464,12 @@ app.get('/parse', (req, res) => {
                 }
             } else {
                 try {
-                    // Create time in the specified timezone
+                    // Create time in the specified timezone using adjusted date
                     const dt = DateTime.fromObject({
-                        year, month, day, hour, minute, second
+                        year: adjustedDate.getFullYear(),
+                        month: adjustedDate.getMonth() + 1,
+                        day: adjustedDate.getDate(),
+                        hour, minute, second
                     }, { zone: timezone });
 
                     if (dt.isValid) {
@@ -440,7 +491,8 @@ app.get('/parse', (req, res) => {
         return {
             jsDate: finalDate,
             timezoneInfo: timezoneInfo,
-            unixTimestamp: Math.floor(finalDate.getTime() / 1000)
+            unixTimestamp: Math.floor(finalDate.getTime() / 1000),
+            wasAdjustedToFuture: finalDate.getTime() !== initialDate.getTime()
         };
     }
 
@@ -464,6 +516,7 @@ app.get('/parse', (req, res) => {
         is_multiple_times: false,
         detected_timezone: detectedTimezone,
         timezone_info: startResult.timezoneInfo,
+        was_adjusted_to_future: startResult.wasAdjustedToFuture,
 
         // Start time info
         start_time: {
@@ -500,6 +553,8 @@ app.get('/parse', (req, res) => {
             minutes: Math.floor(durationMs / (1000 * 60)),
             hours: Math.floor(durationMs / (1000 * 60 * 60))
         };
+
+        response.end_was_adjusted_to_future = endResult.wasAdjustedToFuture;
     }
 
     // Add timezone-specific display
@@ -526,6 +581,7 @@ app.get('/', (req, res) => {
     res.json({
         status: 'running',
         timezone_support: 'Full production timezone support with Luxon + UTC/GMT offset parsing',
+        scheduling_mode: 'Future dates prioritized for scheduling applications',
         endpoints: {
             parse: '/parse?text=your message here'
         },
@@ -549,7 +605,9 @@ app.get('/', (req, res) => {
             '/parse?text=gaming at 8pm UTC +7',
             '/parse?text=stream at 9pm GMT 2:30',
             '/parse?text=available on monday 10pm to thursday 10pm est',
-            '/parse?text=available from 15th to 20th at 10pm netherlands'
+            '/parse?text=available from 15th to 20th at 10pm netherlands',
+            '/parse?text=available from 6pm to 10pm cdt on weekend',
+            '/parse?text=10pm on saturday'
         ]
     });
 });
@@ -564,6 +622,6 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(port, () => {
-    console.log(`Production Chrono.js API running at http://localhost:${port}`);
-    console.log(`Test: http://localhost:${port}/parse?text=tomorrow at 3pm bangladesh time`);
+    console.log(`Production Chrono.js API with Future Date Logic running at http://localhost:${port}`);
+    console.log(`Test: http://localhost:${port}/parse?text=available from 6pm to 10pm cdt on weekend`);
 });
