@@ -6,6 +6,25 @@ const timezoneMap = require('./timezoneMap.json');
 const app = express();
 const port = 3000;
 
+function hasTimeForScheduling(text) {
+    const timeIndicators = [
+        // 12-hour format
+        /\d{1,2}(?::\d{2})?\s*(?:am|pm|AM|PM)/,
+        // 24-hour format with colons
+        /\b(?:[01]?\d|2[0-3]):[0-5]\d\b/,
+        // 4-digit military time (with or without timezone)
+        /\b(?:[01]\d|2[0-3])[0-5]\d(?:\s*(?:hours?|hrs?|ist|est|pst|cst|utc|gmt|[+-]\d{1,2}(?::\d{2})?))?\b/i,
+        // Word times
+        /\b(?:noon|midnight|evening|morning|afternoon)\b/i,
+        // "at X" patterns
+        /\bat\s+\d/,
+        // "X o'clock"
+        /\d+\s*o'?clock/i
+    ];
+
+    return timeIndicators.some(pattern => pattern.test(text));
+}
+
 // ADD THIS NEW FUNCTION HERE (after the imports, before detectTimezone)
 function preprocessText(text) {
     let processedText = text.trim();
@@ -416,6 +435,15 @@ app.get('/parse', (req, res) => {
         return res.json({
             error: 'Missing text parameter',
             example: '/parse?text=tomorrow at 3pm bangladesh time'
+        });
+    }
+
+    if (!hasTimeForScheduling(originalText)) {
+        return res.json({
+            original_text: originalText,
+            found_dates: false,
+            is_scheduling_relevant: false,
+            message: 'No specific time found - not scheduling relevant'
         });
     }
 
