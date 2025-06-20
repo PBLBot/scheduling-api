@@ -6,6 +6,71 @@ const timezoneMap = require('./timezoneMap.json');
 const app = express();
 const port = 3000;
 
+// ADD THIS NEW FUNCTION HERE (after the imports, before detectTimezone)
+function preprocessText(text) {
+    let processedText = text.trim();
+
+    // Get current date info for context
+    const now = new Date();
+    const currentMonth = now.toLocaleString('en', { month: 'long' });
+
+    // Pattern 1: "11pm on 23" or "11pm on 23rd" -> "11pm on 23rd of [current month]"
+    processedText = processedText.replace(
+        /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s+on\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi,
+        (match, time, day) => {
+            const dayNum = parseInt(day);
+            let suffix;
+            if (dayNum >= 11 && dayNum <= 13) suffix = 'th';
+            else if (dayNum % 10 === 1) suffix = 'st';
+            else if (dayNum % 10 === 2) suffix = 'nd';
+            else if (dayNum % 10 === 3) suffix = 'rd';
+            else suffix = 'th';
+
+            return `${time} on ${day}${suffix} of ${currentMonth}`;
+        }
+    );
+
+    // Pattern 2: "23 11pm" or "23rd 11pm" -> "11pm on 23rd of [current month]"
+    processedText = processedText.replace(
+        /\b(\d{1,2})(?:st|nd|rd|th)?\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/gi,
+        (match, day, time) => {
+            const dayNum = parseInt(day);
+            let suffix;
+            if (dayNum >= 11 && dayNum <= 13) suffix = 'th';
+            else if (dayNum % 10 === 1) suffix = 'st';
+            else if (dayNum % 10 === 2) suffix = 'nd';
+            else if (dayNum % 10 === 3) suffix = 'rd';
+            else suffix = 'th';
+
+            return `${time} on ${day}${suffix} of ${currentMonth}`;
+        }
+    );
+
+    // Pattern 3: "11pm 23rd" -> "11pm on 23rd of [current month]"
+    processedText = processedText.replace(
+        /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s+(\d{1,2}(?:st|nd|rd|th))\b/gi,
+        `$1 on $2 of ${currentMonth}`
+    );
+
+    // Pattern 4: Handle "at" variations like "at 11pm on 23"
+    processedText = processedText.replace(
+        /\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s+on\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi,
+        (match, time, day) => {
+            const dayNum = parseInt(day);
+            let suffix;
+            if (dayNum >= 11 && dayNum <= 13) suffix = 'th';
+            else if (dayNum % 10 === 1) suffix = 'st';
+            else if (dayNum % 10 === 2) suffix = 'nd';
+            else if (dayNum % 10 === 3) suffix = 'rd';
+            else suffix = 'th';
+
+            return `at ${time} on ${day}${suffix} of ${currentMonth}`;
+        }
+    );
+
+    return processedText;
+}
+
 function detectTimezone(text) {
     const lowerText = text.toLowerCase();
 
@@ -343,15 +408,23 @@ function parseDateRange(text, detectedTimezone) {
     return results;
 }
 
-// Enhanced parsing endpoint with range support
+// MODIFY THIS ENDPOINT - Replace the beginning of your /parse endpoint
 app.get('/parse', (req, res) => {
-    const text = req.query.text;
+    const originalText = req.query.text;
 
-    if (!text) {
+    if (!originalText) {
         return res.json({
             error: 'Missing text parameter',
             example: '/parse?text=tomorrow at 3pm bangladesh time'
         });
+    }
+
+    // PREPROCESSING STEP - normalize the text
+    const text = preprocessText(originalText);
+
+    // Log the preprocessing for debugging (remove in production)
+    if (text !== originalText) {
+        console.log(`Preprocessed: "${originalText}" -> "${text}"`);
     }
 
     // Detect timezone from text
@@ -362,7 +435,8 @@ app.get('/parse', (req, res) => {
 
     if (multipleDaysResult) {
         return res.json({
-            original_text: text,
+            original_text: originalText, // Keep original in response
+            preprocessed_text: text !== originalText ? text : undefined,
             found_dates: true,
             is_range: false,
             is_multiple_times: true,
@@ -389,7 +463,8 @@ app.get('/parse', (req, res) => {
 
     if (dateRangeResult) {
         return res.json({
-            original_text: text,
+            original_text: originalText,
+            preprocessed_text: text !== originalText ? text : undefined,
             found_dates: true,
             is_range: true,
             is_multiple_times: true,
@@ -412,11 +487,12 @@ app.get('/parse', (req, res) => {
     }
 
     // Parse the text with Chrono (fallback to original logic)
-    const results = chrono.parse(text);
+    const results = chrono.parse(text); // Now using preprocessed text
 
     if (results.length === 0) {
         return res.json({
-            original_text: text,
+            original_text: originalText,
+            preprocessed_text: text !== originalText ? text : undefined,
             found_dates: false,
             is_range: false,
             is_multiple_times: false,
@@ -427,7 +503,6 @@ app.get('/parse', (req, res) => {
 
     const result = results[0];
 
-    // Helper function to process a chrono date component
     // Helper function to process a chrono date component
     function processChronoDate(chronoComponent, timezone, isEndDate = false, startDate = null) {
         const year = chronoComponent.get('year');
@@ -440,7 +515,7 @@ app.get('/parse', (req, res) => {
         let initialDate = chronoComponent.date();
 
         // Apply future adjustment for scheduling with range awareness
-        let adjustedDate = adjustToFuture(initialDate, text, isEndDate, startDate);
+        let adjustedDate = adjustToFuture(initialDate, originalText, isEndDate, startDate);
 
         let finalDate = adjustedDate;
         let timezoneInfo = null;
@@ -528,7 +603,8 @@ app.get('/parse', (req, res) => {
 
     // Build the response
     const response = {
-        original_text: text,
+        original_text: originalText,
+        preprocessed_text: text !== originalText ? text : undefined,
         found_dates: true,
         is_range: isRange,
         is_multiple_times: false,
