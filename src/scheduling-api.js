@@ -162,8 +162,7 @@ function detectTimezone(text) {
     return null;
 }
 
-// NEW: Helper function to adjust dates to future
-// NEW: Helper function to adjust dates to future
+// FIXED: Helper function to adjust dates to future
 function adjustToFuture(jsDate, originalText, isEndDate = false, startDate = null) {
     const now = new Date();
     const oneDayMs = 24 * 60 * 60 * 1000;
@@ -171,15 +170,32 @@ function adjustToFuture(jsDate, originalText, isEndDate = false, startDate = nul
 
     // If this is an end date in a range, ensure it's after the start date
     if (isEndDate && startDate) {
-        // If end date is before start date, move it to next week
+        // If end date is before start date, move it to next occurrence
         if (jsDate.getTime() <= startDate.getTime()) {
-            return new Date(jsDate.getTime() + oneWeekMs);
+            // Check if it's a day-of-week reference first
+            const lowerText = originalText.toLowerCase();
+            const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+            if (dayOfWeekPattern.test(lowerText)) {
+                return new Date(jsDate.getTime() + oneWeekMs);
+            } else {
+                // For date references, try tomorrow first
+                return new Date(jsDate.getTime() + oneDayMs);
+            }
         }
-        // If end date is valid but in the past, move both start and end forward
+
+        // If end date is valid but in the past, move forward appropriately
         if (jsDate.getTime() < now.getTime()) {
-            const diffMs = jsDate.getTime() - startDate.getTime();
-            const weeksToAdd = Math.ceil((now.getTime() - jsDate.getTime()) / oneWeekMs);
-            return new Date(jsDate.getTime() + (weeksToAdd * oneWeekMs));
+            const lowerText = originalText.toLowerCase();
+            const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+            if (dayOfWeekPattern.test(lowerText)) {
+                const weeksToAdd = Math.ceil((now.getTime() - jsDate.getTime()) / oneWeekMs);
+                return new Date(jsDate.getTime() + (weeksToAdd * oneWeekMs));
+            } else {
+                // For time-only references, try tomorrow first
+                return new Date(jsDate.getTime() + oneDayMs);
+            }
         }
         return jsDate;
     }
@@ -188,13 +204,58 @@ function adjustToFuture(jsDate, originalText, isEndDate = false, startDate = nul
     if (jsDate.getTime() < (now.getTime() - (60 * 60 * 1000))) {
         const lowerText = originalText.toLowerCase();
 
-        // Check if it's a day-of-week reference
+        // Check for specific patterns that indicate when to use different adjustment strategies
         const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
         const weekendPattern = /\bweekend\b/i;
+        const nextWeekPattern = /\bnext\s+(week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+        const tomorrowPattern = /\btomorrow\b/i;
+        const todayPattern = /\btoday\b/i;
 
-        if (dayOfWeekPattern.test(lowerText) || weekendPattern.test(lowerText)) {
-            // For day-of-week references, move to next occurrence (add a week)
+        // If it explicitly says "tomorrow", just move to tomorrow
+        if (tomorrowPattern.test(lowerText)) {
+            const tomorrow = new Date(now);
+            tomorrow.setDate(now.getDate() + 1);
+            tomorrow.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), jsDate.getMilliseconds());
+            return tomorrow;
+        }
+
+        // If it explicitly says "today", keep today but adjust time if needed
+        if (todayPattern.test(lowerText)) {
+            const todayDate = new Date(now);
+            todayDate.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), jsDate.getMilliseconds());
+            // If the time has passed today, move to tomorrow
+            if (todayDate.getTime() < now.getTime()) {
+                todayDate.setDate(todayDate.getDate() + 1);
+            }
+            return todayDate;
+        }
+
+        // If it explicitly mentions "next week" or "next [day]", use next week
+        if (nextWeekPattern.test(lowerText)) {
             return new Date(jsDate.getTime() + oneWeekMs);
+        }
+
+        // For day-of-week references without "next", be smarter about adjustment
+        if (dayOfWeekPattern.test(lowerText) || weekendPattern.test(lowerText)) {
+            const currentDay = now.getDay();
+            const targetDay = jsDate.getDay();
+
+            // If it's the same day of week and time hasn't passed yet, keep this week
+            if (currentDay === targetDay && jsDate.getTime() > now.getTime()) {
+                return jsDate;
+            }
+
+            // Otherwise move to next occurrence (next week)
+            return new Date(jsDate.getTime() + oneWeekMs);
+        }
+
+        // For time-only references (like "2pm eastern"), try tomorrow first
+        const timeOnlyPattern = /^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*(?:eastern|est|pst|cst|mst|pacific|central|mountain)?\s*$/i;
+        if (timeOnlyPattern.test(lowerText.trim())) {
+            // Just move to tomorrow
+            const tomorrow = new Date(jsDate);
+            tomorrow.setDate(jsDate.getDate() + 1);
+            return tomorrow;
         }
 
         // For date ranges like "15th to 20th", move to next month if past
@@ -205,15 +266,29 @@ function adjustToFuture(jsDate, originalText, isEndDate = false, startDate = nul
             return nextMonth;
         }
 
-        // For other cases, try adding appropriate time periods
-        if (jsDate.getTime() < (now.getTime() - oneWeekMs)) {
-            // If more than a week old, move to next month
+        // For other cases, be more conservative
+        const daysDiff = Math.floor((now.getTime() - jsDate.getTime()) / oneDayMs);
+
+        if (daysDiff === 0) {
+            // Same day but time passed - move to tomorrow
+            const tomorrow = new Date(jsDate);
+            tomorrow.setDate(jsDate.getDate() + 1);
+            return tomorrow;
+        } else if (daysDiff <= 7) {
+            // Within a week - move to next week only if it seems like a recurring event
+            if (dayOfWeekPattern.test(lowerText)) {
+                return new Date(jsDate.getTime() + oneWeekMs);
+            } else {
+                // Otherwise try tomorrow
+                const tomorrow = new Date(jsDate);
+                tomorrow.setDate(jsDate.getDate() + 1);
+                return tomorrow;
+            }
+        } else {
+            // More than a week old, move to next month
             const nextMonth = new Date(jsDate);
             nextMonth.setMonth(nextMonth.getMonth() + 1);
             return nextMonth;
-        } else {
-            // If less than a week old, move to next week
-            return new Date(jsDate.getTime() + oneWeekMs);
         }
     }
 
