@@ -170,128 +170,70 @@ function adjustToFuture(jsDate, originalText, isEndDate = false, startDate = nul
 
     // If this is an end date in a range, ensure it's after the start date
     if (isEndDate && startDate) {
-        // If end date is before start date, move it to next occurrence
         if (jsDate.getTime() <= startDate.getTime()) {
-            // Check if it's a day-of-week reference first
-            const lowerText = originalText.toLowerCase();
-            const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-
-            if (dayOfWeekPattern.test(lowerText)) {
-                return new Date(jsDate.getTime() + oneWeekMs);
-            } else {
-                // For date references, try tomorrow first
-                return new Date(jsDate.getTime() + oneDayMs);
-            }
+            return new Date(jsDate.getTime() + oneDayMs);
         }
-
-        // If end date is valid but in the past, move forward appropriately
         if (jsDate.getTime() < now.getTime()) {
-            const lowerText = originalText.toLowerCase();
-            const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-
-            if (dayOfWeekPattern.test(lowerText)) {
-                const weeksToAdd = Math.ceil((now.getTime() - jsDate.getTime()) / oneWeekMs);
-                return new Date(jsDate.getTime() + (weeksToAdd * oneWeekMs));
-            } else {
-                // For time-only references, try tomorrow first
-                return new Date(jsDate.getTime() + oneDayMs);
-            }
+            return new Date(jsDate.getTime() + oneDayMs);
         }
         return jsDate;
     }
 
-    // If the date is more than 1 hour in the past, adjust it forward
-    if (jsDate.getTime() < (now.getTime() - (60 * 60 * 1000))) {
-        const lowerText = originalText.toLowerCase();
+    const lowerText = originalText.toLowerCase();
 
-        // Check for specific patterns that indicate when to use different adjustment strategies
-        const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-        const weekendPattern = /\bweekend\b/i;
-        const nextWeekPattern = /\bnext\s+(week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-        const tomorrowPattern = /\btomorrow\b/i;
-        const todayPattern = /\btoday\b/i;
-
-        // If it explicitly says "tomorrow", just move to tomorrow
-        if (tomorrowPattern.test(lowerText)) {
-            const tomorrow = new Date(now);
-            tomorrow.setDate(now.getDate() + 1);
-            tomorrow.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), jsDate.getMilliseconds());
-            return tomorrow;
-        }
-
-        // If it explicitly says "today", keep today but adjust time if needed
-        if (todayPattern.test(lowerText)) {
-            const todayDate = new Date(now);
-            todayDate.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), jsDate.getMilliseconds());
-            // If the time has passed today, move to tomorrow
-            if (todayDate.getTime() < now.getTime()) {
-                todayDate.setDate(todayDate.getDate() + 1);
-            }
-            return todayDate;
-        }
-
-        // If it explicitly mentions "next week" or "next [day]", use next week
-        if (nextWeekPattern.test(lowerText)) {
-            return new Date(jsDate.getTime() + oneWeekMs);
-        }
-
-        // For day-of-week references without "next", be smarter about adjustment
-        if (dayOfWeekPattern.test(lowerText) || weekendPattern.test(lowerText)) {
-            const currentDay = now.getDay();
-            const targetDay = jsDate.getDay();
-
-            // If it's the same day of week and time hasn't passed yet, keep this week
-            if (currentDay === targetDay && jsDate.getTime() > now.getTime()) {
-                return jsDate;
-            }
-
-            // Otherwise move to next occurrence (next week)
-            return new Date(jsDate.getTime() + oneWeekMs);
-        }
-
-        // For time-only references (like "2pm eastern"), try tomorrow first
-        const timeOnlyPattern = /^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*(?:eastern|est|pst|cst|mst|pacific|central|mountain)?\s*$/i;
-        if (timeOnlyPattern.test(lowerText.trim())) {
-            // Just move to tomorrow
-            const tomorrow = new Date(jsDate);
-            tomorrow.setDate(jsDate.getDate() + 1);
-            return tomorrow;
-        }
-
-        // For date ranges like "15th to 20th", move to next month if past
-        const dateRangePattern = /\d{1,2}(?:st|nd|rd|th)?\s+to\s+\d{1,2}(?:st|nd|rd|th)?/i;
-        if (dateRangePattern.test(lowerText)) {
-            const nextMonth = new Date(jsDate);
-            nextMonth.setMonth(nextMonth.getMonth() + 1);
-            return nextMonth;
-        }
-
-        // For other cases, be more conservative
-        const daysDiff = Math.floor((now.getTime() - jsDate.getTime()) / oneDayMs);
-
-        if (daysDiff === 0) {
-            // Same day but time passed - move to tomorrow
-            const tomorrow = new Date(jsDate);
-            tomorrow.setDate(jsDate.getDate() + 1);
-            return tomorrow;
-        } else if (daysDiff <= 7) {
-            // Within a week - move to next week only if it seems like a recurring event
-            if (dayOfWeekPattern.test(lowerText)) {
-                return new Date(jsDate.getTime() + oneWeekMs);
-            } else {
-                // Otherwise try tomorrow
-                const tomorrow = new Date(jsDate);
-                tomorrow.setDate(jsDate.getDate() + 1);
-                return tomorrow;
-            }
-        } else {
-            // More than a week old, move to next month
-            const nextMonth = new Date(jsDate);
-            nextMonth.setMonth(nextMonth.getMonth() + 1);
-            return nextMonth;
-        }
+    // If explicitly says "tomorrow", always use tomorrow
+    if (lowerText.includes('tomorrow')) {
+        const tomorrow = new Date(now);
+        tomorrow.setDate(now.getDate() + 1);
+        tomorrow.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), 0);
+        return tomorrow;
     }
 
+    // If explicitly says "today", use today (but adjust if time passed)
+    if (lowerText.includes('today')) {
+        const today = new Date(now);
+        today.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), 0);
+        if (today.getTime() <= now.getTime()) {
+            // Time has passed today, move to tomorrow
+            today.setDate(today.getDate() + 1);
+        }
+        return today;
+    }
+
+    // Check if the parsed date is in the past
+    if (jsDate.getTime() <= now.getTime()) {
+        // For day-of-week references, move to next occurrence
+        const dayOfWeekPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+        if (dayOfWeekPattern.test(lowerText)) {
+            return new Date(jsDate.getTime() + oneWeekMs);
+        }
+
+        // For simple time references (like "2pm eastern"), move to next occurrence
+        // This could be later today, tomorrow, or next week depending on context
+        const timeOnlyPattern = /^\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)/i;
+        if (timeOnlyPattern.test(lowerText.trim())) {
+            // Check if we can fit it today
+            const todayAtTime = new Date(now);
+            todayAtTime.setHours(jsDate.getHours(), jsDate.getMinutes(), jsDate.getSeconds(), 0);
+
+            if (todayAtTime.getTime() > now.getTime()) {
+                // Time hasn't passed today, use today
+                return todayAtTime;
+            } else {
+                // Time has passed today, use tomorrow
+                const tomorrow = new Date(todayAtTime);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                return tomorrow;
+            }
+        }
+
+        // For other cases, move to tomorrow
+        const tomorrow = new Date(jsDate);
+        tomorrow.setDate(jsDate.getDate() + 1);
+        return tomorrow;
+    }
+
+    // Date is in the future, return as is
     return jsDate;
 }
 
@@ -607,7 +549,7 @@ app.get('/parse', (req, res) => {
     const result = results[0];
 
     // Helper function to process a chrono date component
-    function processChronoDate(chronoComponent, timezone, isEndDate = false, startDate = null) {
+    function processChronoDate(chronoComponent, timezone, isEndDate = false, startDate = null, originalText = '') {
         const year = chronoComponent.get('year');
         const month = chronoComponent.get('month');
         const day = chronoComponent.get('day');
@@ -617,10 +559,8 @@ app.get('/parse', (req, res) => {
 
         let initialDate = chronoComponent.date();
 
-        // Apply future adjustment for scheduling with range awareness
-        let adjustedDate = adjustToFuture(initialDate, originalText, isEndDate, startDate);
-
-        let finalDate = adjustedDate;
+        // CRITICAL FIX: Handle timezone BEFORE adjusting to future
+        let timezoneAdjustedDate = initialDate;
         let timezoneInfo = null;
 
         if (timezone) {
@@ -628,15 +568,18 @@ app.get('/parse', (req, res) => {
                 const offsetMinutes = parseInt(timezone.replace('UTC_OFFSET_', ''));
 
                 try {
+                    // Create the time in the specified timezone offset
                     const specifiedTimeDt = DateTime.fromObject({
-                        year: adjustedDate.getFullYear(),
-                        month: adjustedDate.getMonth() + 1,
-                        day: adjustedDate.getDate(),
-                        hour, minute, second
+                        year: year || new Date().getFullYear(),
+                        month: month || new Date().getMonth() + 1,
+                        day: day || new Date().getDate(),
+                        hour: hour || 0,
+                        minute: minute || 0,
+                        second: second || 0
                     }, { zone: 'UTC' }).minus({ minutes: offsetMinutes });
 
                     if (specifiedTimeDt.isValid) {
-                        finalDate = specifiedTimeDt.toJSDate();
+                        timezoneAdjustedDate = specifiedTimeDt.toJSDate();
 
                         const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
                         const offsetMins = Math.abs(offsetMinutes) % 60;
@@ -656,19 +599,22 @@ app.get('/parse', (req, res) => {
                     }
                 } catch (error) {
                     console.warn('Manual offset conversion failed:', error.message);
+                    timezoneAdjustedDate = initialDate;
                 }
             } else {
                 try {
-                    // Create time in the specified timezone using adjusted date
+                    // Create time in the specified timezone
                     const dt = DateTime.fromObject({
-                        year: adjustedDate.getFullYear(),
-                        month: adjustedDate.getMonth() + 1,
-                        day: adjustedDate.getDate(),
-                        hour, minute, second
+                        year: year || new Date().getFullYear(),
+                        month: month || new Date().getMonth() + 1,
+                        day: day || new Date().getDate(),
+                        hour: hour || 0,
+                        minute: minute || 0,
+                        second: second || 0
                     }, { zone: timezone });
 
                     if (dt.isValid) {
-                        finalDate = dt.toJSDate();
+                        timezoneAdjustedDate = dt.toJSDate();
                         timezoneInfo = {
                             timezone: timezone,
                             offset: dt.offset,
@@ -679,20 +625,24 @@ app.get('/parse', (req, res) => {
                     }
                 } catch (error) {
                     console.warn('Timezone conversion failed:', error.message);
+                    timezoneAdjustedDate = initialDate;
                 }
             }
         }
+
+        // NOW apply future adjustment to the timezone-adjusted date
+        let finalDate = adjustToFuture(timezoneAdjustedDate, originalText, isEndDate, startDate);
 
         return {
             jsDate: finalDate,
             timezoneInfo: timezoneInfo,
             unixTimestamp: Math.floor(finalDate.getTime() / 1000),
-            wasAdjustedToFuture: finalDate.getTime() !== initialDate.getTime()
+            wasAdjustedToFuture: finalDate.getTime() !== timezoneAdjustedDate.getTime()
         };
     }
 
     // Process start time
-    const startResult = processChronoDate(result.start, detectedTimezone);
+    const startResult = processChronoDate(result.start, detectedTimezone, false, null, originalText);
 
     // Check if there's an end time (range)
     let endResult = null;
@@ -701,7 +651,7 @@ app.get('/parse', (req, res) => {
     if (result.end) {
         isRange = true;
         // Pass the start date to ensure end date is after start date
-        endResult = processChronoDate(result.end, detectedTimezone, true, startResult.jsDate);
+        endResult = processChronoDate(result.end, detectedTimezone, true, startResult.jsDate, originalText);
     }
 
     // Build the response
